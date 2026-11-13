@@ -36,43 +36,65 @@ const YT_HEADERS = {
 
 /**
  * Extracts YouTube Video ID or Playlist ID from URL.
- * If URL has both ?v=... and ?list=... (e.g. watching a video inside a playlist),
- * prioritizes playlist unless list is a personal mix (RD...) or Watch Later (WL).
+ * Resilient against missing protocols (https://), clipped strings (e.g. laylist?list=...),
+ * query parameters (&si=...), and bare video/playlist IDs.
  */
 export function parseYouTubeUrl(url: string): { type: 'playlist' | 'video' | null; id: string | null } {
-  try {
-    const parsed = new URL(url.trim());
+  if (!url || typeof url !== 'string') return { type: null, id: null };
+  const str = url.trim();
 
+  // 1. Direct playlist ID
+  if (/^(PL|UU|FL|OLAK5uy_)[a-zA-Z0-9_-]{10,}$/i.test(str)) {
+    return { type: 'playlist', id: str };
+  }
+
+  // 2. Direct 11-char video ID
+  if (/^[a-zA-Z0-9_-]{11}$/.test(str)) {
+    return { type: 'video', id: str };
+  }
+
+  // 3. Regex search for list=... parameter anywhere in string (even if URL was cut off like laylist?list=...)
+  const listMatch = str.match(/[?&]list=([a-zA-Z0-9_-]+)/i);
+  if (listMatch) {
+    const listId = listMatch[1];
+    if (!listId.startsWith('RD') && listId !== 'WL' && listId !== 'LL') {
+      return { type: 'playlist', id: listId };
+    }
+  }
+
+  // 4. Regex search for v=... parameter
+  const vMatch = str.match(/[?&]v=([a-zA-Z0-9_-]{11})/i);
+  if (vMatch) {
+    return { type: 'video', id: vMatch[1] };
+  }
+
+  // 5. youtu.be/VIDEO_ID or embed/VIDEO_ID or shorts/VIDEO_ID
+  const shortMatch = str.match(/(?:youtu\.be\/|embed\/|shorts\/|live\/)([a-zA-Z0-9_-]{11})/i);
+  if (shortMatch) {
+    return { type: 'video', id: shortMatch[1] };
+  }
+
+  // 6. Standard URL parser fallback with protocol prepending
+  try {
+    const withProto = /^https?:\/\//i.test(str) ? str : `https://${str}`;
+    const parsed = new URL(withProto);
     const listId = parsed.searchParams.get('list');
     const vId = parsed.searchParams.get('v');
 
     if (parsed.pathname.includes('/playlist') && listId) {
       return { type: 'playlist', id: listId };
     }
-
     if (listId && !listId.startsWith('RD') && listId !== 'WL' && listId !== 'LL') {
       return { type: 'playlist', id: listId };
     }
-
     if (vId) {
       return { type: 'video', id: vId };
     }
-
-    if (parsed.hostname === 'youtu.be') {
-      const videoId = parsed.pathname.slice(1).split('?')[0];
-      if (videoId) return { type: 'video', id: videoId };
-    }
-
-    const parts = parsed.pathname.split('/');
-    const shortOrEmbedIndex = parts.findIndex((p) => p === 'embed' || p === 'shorts' || p === 'live');
-    if (shortOrEmbedIndex !== -1 && parts[shortOrEmbedIndex + 1]) {
-      return { type: 'video', id: parts[shortOrEmbedIndex + 1] };
-    }
-
-    return { type: null, id: null };
   } catch {
-    return { type: null, id: null };
+    // Fall through
   }
+
+  return { type: null, id: null };
 }
 
 /**

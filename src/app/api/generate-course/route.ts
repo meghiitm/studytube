@@ -135,8 +135,7 @@ export async function POST(req: Request) {
       if (!playlist || playlist.videos.length === 0) {
         return NextResponse.json(
           {
-            error:
-              'Could not load videos from this playlist. Make sure the playlist is public or unlisted (not private).',
+            error: `Could not load videos from playlist "${id}". Please verify that the playlist link is complete and that it is public or unlisted.`,
           },
           { status: 404 }
         );

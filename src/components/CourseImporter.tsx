@@ -79,12 +79,30 @@ export const CourseImporter: React.FC = () => {
             <button
               type="button"
               onClick={() => setError(null)}
-              className="underline hover:text-rose-800 font-medium cursor-pointer"
+              className="underline hover:text-rose-800 font-medium cursor-pointer shrink-0 ml-2"
             >
               Dismiss
             </button>
           </div>
         )}
+
+        <div className="mt-3 flex items-center justify-center gap-2 flex-wrap text-[11px] text-slate-500">
+          <span className="font-medium">Try pasting:</span>
+          <button
+            type="button"
+            onClick={() => setUrl('https://www.youtube.com/watch?v=wm5gMKuwSYk')}
+            className="px-2.5 py-1 rounded-full bg-slate-100 hover:bg-blue-50 hover:text-blue-600 text-slate-600 transition cursor-pointer"
+          >
+            Full Next.js Course (Video)
+          </button>
+          <button
+            type="button"
+            onClick={() => setUrl('https://www.youtube.com/playlist?list=PLillGF-RfqbYeckUaD1z6nE4DoOZLNTNU')}
+            className="px-2.5 py-1 rounded-full bg-slate-100 hover:bg-blue-50 hover:text-blue-600 text-slate-600 transition cursor-pointer"
+          >
+            React Crash Course (Playlist)
+          </button>
+        </div>
       </form>
     </div>
   );
