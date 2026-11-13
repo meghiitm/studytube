@@ -13,24 +13,17 @@ import {
   AuthUser,
   getActiveFirebaseConfig,
   parseFirebaseConfigInput,
-  subscribeFirebaseAuth,
-  signInWithGooglePopup,
-  signOutFirebase,
+  subscribeToAuth,
+  loginWithGoogle as authLoginWithGoogle,
+  logout as authLogout,
+  handleRedirectResult,
   loadCloudUserData,
   saveCloudUserData,
   CloudUserData,
-} from '@/lib/firebase';
-import {
-  loadPuterScript,
-  getPuterUserIfSignedIn,
-  signInWithPuter,
-  signOutPuter,
-  loadPuterCloudData,
-  savePuterCloudData,
-} from '@/lib/puter';
+  initGoogleOneTap,
+} from '@/lib/auth';
 
 export type SyncStatus = 'local' | 'syncing' | 'synced' | 'error';
-export type AuthProviderKind = 'firebase' | 'puter' | null;
 
 interface CourseContextType {
   courses: Course[];
@@ -41,7 +34,6 @@ interface CourseContextType {
   darkMode: boolean;
   isLoaded: boolean;
   user: AuthUser | null;
-  authProvider: AuthProviderKind;
   authLoading: boolean;
   firebaseConfigured: boolean;
   firebaseConfigSource: 'env' | 'local' | null;
@@ -52,8 +44,10 @@ interface CourseContextType {
   toggleDarkMode: () => void;
   saveFirebaseConfig: (rawConfig: string) => boolean;
   clearFirebaseConfig: () => void;
-  signInOneClick: () => Promise<void>;
-  signInWithGoogle: () => Promise<void>;
+  loginWithGoogle: () => Promise<AuthUser | null>;
+  logout: () => Promise<void>;
+  signInOneClick: () => Promise<AuthUser | null>;
+  signInWithGoogle: () => Promise<AuthUser | null>;
   signOut: () => Promise<void>;
   addCourse: (course: Course) => void;
   deleteCourse: (id: string) => void;
@@ -208,10 +202,9 @@ export function CourseProvider({ children }: { children: React.ReactNode }) {
   const [darkMode, setDarkMode] = useState<boolean>(false);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // Auth & Sync state (Firebase Google Sign-In or zero-config 1-click Puter Cloud Sync)
+  // Auth & Sync state (Firebase Google Sign-In with Cloud Firestore)
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [authProvider, setAuthProvider] = useState<AuthProviderKind>(null);
-  const [authLoading, setAuthLoading] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
   const [firebaseConfigured, setFirebaseConfigured] = useState(false);
   const [firebaseConfigSource, setFirebaseConfigSource] = useState<'env' | 'local' | null>(null);
   const [firebaseConfigText, setFirebaseConfigText] = useState('');
@@ -271,7 +264,9 @@ export function CourseProvider({ children }: { children: React.ReactNode }) {
       setFirebaseConfigured(Boolean(config));
       setFirebaseConfigSource(source);
     } catch (e) {
-      console.error('Error loading data from localStorage', e);
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('Error loading data from localStorage', e);
+      }
     } finally {
       setIsLoaded(true);
     }
@@ -290,47 +285,33 @@ export function CourseProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
-  // Subscribe to Firebase Auth when configured, otherwise preload Puter 1-click auth & restore session
+  // 1. Handle redirect result on mobile browsers on page load
   useEffect(() => {
-    if (!isLoaded) return;
+    if (!isLoaded || !firebaseConfigured) return;
 
-    if (!firebaseConfigured) {
-      let cancelled = false;
-      loadPuterScript()
-        .then(() => getPuterUserIfSignedIn())
-        .then(async (puterUser) => {
-          if (cancelled || !puterUser) return;
-          setUser(puterUser);
-          setAuthProvider('puter');
-          setSyncStatus('syncing');
-          setSyncError(null);
-          try {
-            const cloud = await loadPuterCloudData();
-            if (!cancelled) {
-              applyMergedCloudData(cloud);
-              cloudHydratedUidRef.current = puterUser.uid;
-              setSyncStatus('synced');
-            }
-          } catch (err: any) {
-            if (!cancelled) {
-              setSyncStatus('error');
-              setSyncError(err?.message || 'Failed to sync with Puter Cloud.');
-            }
-          }
-        })
-        .catch(() => {
-          // Silently stay local if Puter CDN is unreachable offline
-        });
+    handleRedirectResult()
+      .then((redirectUser) => {
+        if (redirectUser) {
+          setUser(redirectUser);
+        }
+      })
+      .catch((err) => {
+        setSyncError(err?.message || 'Redirect sign-in failed');
+      });
+  }, [isLoaded, firebaseConfigured]);
 
-      return () => {
-        cancelled = true;
-      };
+  // 2. Subscribe to Firebase Auth (keeps user signed in across reloads with onAuthStateChanged)
+  useEffect(() => {
+    if (!isLoaded || !firebaseConfigured) {
+      setUser(null);
+      setAuthLoading(false);
+      setSyncStatus('local');
+      return;
     }
 
     setAuthLoading(true);
-    const unsub = subscribeFirebaseAuth(async (fbUser) => {
+    const unsub = subscribeToAuth(async (fbUser) => {
       setUser(fbUser);
-      setAuthProvider(fbUser ? 'firebase' : null);
       setAuthLoading(false);
 
       if (!fbUser) {
@@ -349,7 +330,6 @@ export function CourseProvider({ children }: { children: React.ReactNode }) {
         cloudHydratedUidRef.current = fbUser.uid;
         setSyncStatus('synced');
       } catch (err: any) {
-        console.error('Cloud sync load error:', err);
         setSyncStatus('error');
         setSyncError(err?.message || 'Failed to sync with Firestore.');
       }
@@ -357,6 +337,14 @@ export function CourseProvider({ children }: { children: React.ReactNode }) {
 
     return () => unsub();
   }, [isLoaded, firebaseConfigured]);
+
+  // 3. Initialize Google One Tap with FedCM flags enabled for returning users
+  useEffect(() => {
+    if (!isLoaded || !firebaseConfigured || user) return;
+
+    const cleanup = initGoogleOneTap();
+    return cleanup;
+  }, [isLoaded, firebaseConfigured, user]);
 
   // Apply dark mode class to root html
   useEffect(() => {
@@ -370,7 +358,7 @@ export function CourseProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem('studytube_dark_mode', darkMode ? 'true' : 'false');
   }, [darkMode, isLoaded]);
 
-  // Save to LocalStorage + Debounced Save to Cloud (Firestore or Puter KV) when signed in
+  // Save to LocalStorage + Debounced Save to Cloud Firestore when signed in
   useEffect(() => {
     if (!isLoaded) return;
     try {
@@ -384,13 +372,12 @@ export function CourseProvider({ children }: { children: React.ReactNode }) {
         localStorage.removeItem('studytube_gemini_api_key');
       }
     } catch (e) {
-      console.error('Error saving data to localStorage', e);
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('Error saving data to localStorage', e);
+      }
     }
 
-    const canSyncFirebase = authProvider === 'firebase' && firebaseConfigured;
-    const canSyncPuter = authProvider === 'puter';
-
-    if (user && (canSyncFirebase || canSyncPuter) && cloudHydratedUidRef.current === user.uid) {
+    if (user && firebaseConfigured && cloudHydratedUidRef.current === user.uid) {
       if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
       setSyncStatus('syncing');
       syncTimerRef.current = setTimeout(async () => {
@@ -402,21 +389,16 @@ export function CourseProvider({ children }: { children: React.ReactNode }) {
             roadmaps,
             updatedAt: new Date().toISOString(),
           };
-          if (canSyncFirebase) {
-            await saveCloudUserData(user.uid, payload);
-          } else {
-            await savePuterCloudData(payload);
-          }
+          await saveCloudUserData(user.uid, payload);
           setSyncStatus('synced');
           setSyncError(null);
         } catch (err: any) {
-          console.error('Cloud sync save error:', err);
           setSyncStatus('error');
-          setSyncError(err?.message || 'Failed to save changes to cloud.');
+          setSyncError(err?.message || 'Failed to save changes to Firestore.');
         }
       }, 800);
     }
-  }, [courses, progress, stats, roadmaps, apiKey, isLoaded, user, authProvider, firebaseConfigured]);
+  }, [courses, progress, stats, roadmaps, apiKey, isLoaded, user, firebaseConfigured]);
 
   const saveFirebaseConfig = (rawConfig: string): boolean => {
     const parsed = parseFirebaseConfigInput(rawConfig);
@@ -439,48 +421,23 @@ export function CourseProvider({ children }: { children: React.ReactNode }) {
     if (!config) {
       cloudHydratedUidRef.current = null;
       setUser(null);
-      setAuthProvider(null);
       setSyncStatus('local');
     }
   };
 
-  const signInWithGoogle = async () => {
+  const loginWithGoogle = async (): Promise<AuthUser | null> => {
     setSyncError(null);
-    await signInWithGooglePopup();
+    const loggedIn = await authLoginWithGoogle();
+    if (loggedIn) {
+      setUser(loggedIn);
+    }
+    return loggedIn;
   };
 
-  const signInOneClick = async () => {
-    setSyncError(null);
-    if (firebaseConfigured) {
-      await signInWithGooglePopup();
-      return;
-    }
-
-    const puterUser = await signInWithPuter();
-    setUser(puterUser);
-    setAuthProvider('puter');
-    setSyncStatus('syncing');
-
-    try {
-      const cloud = await loadPuterCloudData();
-      applyMergedCloudData(cloud);
-      cloudHydratedUidRef.current = puterUser.uid;
-      setSyncStatus('synced');
-    } catch (err: any) {
-      setSyncStatus('error');
-      setSyncError(err?.message || 'Signed in, but cloud sync failed.');
-    }
-  };
-
-  const signOutUser = async () => {
-    if (authProvider === 'puter') {
-      await signOutPuter();
-    } else if (firebaseConfigured) {
-      await signOutFirebase();
-    }
+  const logout = async (): Promise<void> => {
+    await authLogout();
     cloudHydratedUidRef.current = null;
     setUser(null);
-    setAuthProvider(null);
     setSyncStatus('local');
   };
 
@@ -747,7 +704,6 @@ export function CourseProvider({ children }: { children: React.ReactNode }) {
         darkMode,
         isLoaded,
         user,
-        authProvider,
         authLoading,
         firebaseConfigured,
         firebaseConfigSource,
@@ -758,9 +714,11 @@ export function CourseProvider({ children }: { children: React.ReactNode }) {
         toggleDarkMode,
         saveFirebaseConfig,
         clearFirebaseConfig,
-        signInOneClick,
-        signInWithGoogle,
-        signOut: signOutUser,
+        loginWithGoogle,
+        logout,
+        signInOneClick: loginWithGoogle,
+        signInWithGoogle: loginWithGoogle,
+        signOut: logout,
         addCourse,
         deleteCourse,
         getCourse,

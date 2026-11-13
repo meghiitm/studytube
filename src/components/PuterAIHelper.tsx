@@ -81,7 +81,7 @@ export const PuterAIHelper: React.FC<PuterAIHelperProps> = ({
     } catch (err: any) {
       setError(
         err?.message ||
-          'Could not reach AI helper. Add a Gemini key in Settings or sign into Puter when prompted.'
+          'Could not reach AI helper. You can add a free Gemini API key in Platform Settings.'
       );
     } finally {
       setLoadingMode(null);

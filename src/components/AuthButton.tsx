@@ -11,53 +11,57 @@ interface AuthButtonProps {
 export const AuthButton: React.FC<AuthButtonProps> = ({ onOpenSettings }) => {
   const {
     user,
-    authProvider,
     authLoading,
-    firebaseConfigured,
     syncStatus,
-    signInOneClick,
-    signOut,
+    syncError,
+    loginWithGoogle,
+    logout,
   } = useCourses();
   const [signingIn, setSigningIn] = useState(false);
 
   const handleSignIn = async () => {
     setSigningIn(true);
     try {
-      await signInOneClick();
+      await loginWithGoogle();
     } catch (err: any) {
-      alert(err?.message || 'Sign-in failed or was cancelled.');
+      alert(err?.message || 'Google sign-in failed or was cancelled.');
     } finally {
       setSigningIn(false);
     }
   };
 
+  // Loading skeleton while initial auth state resolves (never flashes login button for signed-in users)
   if (authLoading) {
     return (
-      <div className="h-8 px-3 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center gap-1.5 text-xs text-slate-500">
-        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-        <span className="hidden sm:inline">Auth...</span>
+      <div
+        className="h-9 px-3 rounded-full bg-slate-100 dark:bg-slate-800/80 border border-gray-200/60 dark:border-slate-700/60 flex items-center gap-2 text-xs text-slate-400 animate-pulse"
+        aria-label="Checking authentication status..."
+      >
+        <div className="w-5 h-5 rounded-full bg-slate-300 dark:bg-slate-700" />
+        <div className="w-12 h-2.5 rounded-full bg-slate-200 dark:bg-slate-700 hidden sm:block" />
       </div>
     );
   }
 
+  // Signed in user view: Google photo + first name + sync status + logout
   if (user) {
     return (
-      <div className="flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-full bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 shadow-sm">
+      <div className="flex items-center gap-2 pl-1.5 pr-2 py-1 rounded-full bg-white dark:bg-slate-900 border border-gray-200 dark:border-slate-700 shadow-sm transition">
         {user.photoURL ? (
           <img
             src={user.photoURL}
-            alt={user.displayName || 'Student'}
-            className="w-6 h-6 rounded-full object-cover"
+            alt={user.displayName || 'Google Profile'}
+            className="w-6 h-6 rounded-full object-cover ring-1 ring-blue-500/30"
           />
         ) : (
-          <div className="w-6 h-6 rounded-full bg-blue-600 text-white text-[10px] font-bold flex items-center justify-center">
-            {(user.displayName || user.email || 'U')[0].toUpperCase()}
+          <div className="w-6 h-6 rounded-full bg-blue-600 text-white text-[10px] font-bold flex items-center justify-center shrink-0">
+            {user.firstName[0]?.toUpperCase() || 'U'}
           </div>
         )}
 
-        <div className="hidden md:flex flex-col leading-tight pr-1">
-          <span className="text-[11px] font-bold text-slate-800 dark:text-slate-100 max-w-[100px] truncate">
-            {user.displayName || user.email}
+        <div className="flex flex-col leading-tight pr-0.5">
+          <span className="text-xs font-bold text-slate-900 dark:text-slate-100 max-w-[110px] truncate">
+            {user.firstName}
           </span>
           <span className="text-[9px] font-semibold flex items-center gap-1 text-slate-500 dark:text-slate-400">
             {syncStatus === 'syncing' && (
@@ -67,18 +71,17 @@ export const AuthButton: React.FC<AuthButtonProps> = ({ onOpenSettings }) => {
             )}
             {syncStatus === 'synced' && (
               <>
-                <Cloud className="w-2.5 h-2.5 text-emerald-500" />
-                {authProvider === 'firebase' ? 'Google Synced' : 'Cloud Synced'}
+                <Cloud className="w-2.5 h-2.5 text-emerald-500" /> Synced
               </>
             )}
             {syncStatus === 'error' && (
               <button
                 type="button"
                 onClick={onOpenSettings}
-                className="inline-flex items-center gap-1 hover:underline cursor-pointer"
-                title="Open Sync Settings"
+                className="inline-flex items-center gap-1 hover:underline text-rose-500 cursor-pointer"
+                title={syncError || 'Sync error'}
               >
-                <CloudOff className="w-2.5 h-2.5 text-rose-500" /> Sync Error
+                <CloudOff className="w-2.5 h-2.5" /> Sync Error
               </button>
             )}
             {syncStatus === 'local' && 'Local'}
@@ -87,9 +90,10 @@ export const AuthButton: React.FC<AuthButtonProps> = ({ onOpenSettings }) => {
 
         <button
           type="button"
-          onClick={() => signOut()}
-          className="p-1 rounded-full text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition cursor-pointer"
-          title="Sign out"
+          onClick={() => logout()}
+          className="p-1.5 rounded-full text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition cursor-pointer"
+          title="Sign out of Google"
+          aria-label="Logout"
         >
           <LogOut className="w-3.5 h-3.5" />
         </button>
@@ -97,22 +101,20 @@ export const AuthButton: React.FC<AuthButtonProps> = ({ onOpenSettings }) => {
     );
   }
 
+  // Clean, accessible "Continue with Google" button with official Google "G" logo
   return (
     <button
       type="button"
       onClick={handleSignIn}
       disabled={signingIn}
-      className="bg-white dark:bg-slate-900 hover:bg-gray-50 dark:hover:bg-slate-800 border border-gray-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold py-2 px-3.5 rounded-full transition-all shadow-sm hover:shadow flex items-center gap-1.5 cursor-pointer"
-      title={
-        firebaseConfigured
-          ? 'One-click Google Sign-In to sync progress, notes, and quiz scores across devices'
-          : 'One-click Cloud Sign-In (Google, Apple, or email via Puter) — no setup needed'
-      }
+      aria-label="Continue with Google"
+      className="bg-white hover:bg-slate-50 dark:bg-slate-900 dark:hover:bg-slate-800 border border-gray-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs sm:text-xs font-semibold py-2 px-3.5 sm:px-4 rounded-full transition-all shadow-sm hover:shadow flex items-center gap-2 cursor-pointer active:scale-[0.98] disabled:opacity-60"
+      title="Continue with Google to sync your study progress, notes, and quiz scores across all devices"
     >
       {signingIn ? (
-        <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+        <Loader2 className="w-4 h-4 animate-spin text-blue-600 dark:text-blue-400" />
       ) : (
-        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" aria-hidden="true">
+        <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
           <path
             fill="#4285F4"
             d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
@@ -131,7 +133,7 @@ export const AuthButton: React.FC<AuthButtonProps> = ({ onOpenSettings }) => {
           />
         </svg>
       )}
-      <span>Sign in</span>
+      <span className="whitespace-nowrap">Continue with Google</span>
     </button>
   );
 };
